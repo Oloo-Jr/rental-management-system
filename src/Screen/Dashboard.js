@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { auth } from '../Database/config';
 import {
   DollarSign,
   Users,
@@ -19,11 +20,20 @@ import {
   MaintenanceRequestModal,
   LeaseAgreementModal
 } from '../Components/DashboardModals';
-import { addLeaseToFirestore, addMaintenanceRequestToFirestore, addPaymentToFirestore, addPropertyToFirestore, addTenantToFirestore } from '../Database/methods';
+import {
+  addLeaseToFirestore,
+  addMaintenanceRequestToFirestore,
+  addPaymentToFirestore,
+  addPropertyToFirestore,
+  addTenantToFirestore
+} from '../Database/methods';
 
 const Dashboard = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
   const profileMenuRef = useRef(null);
   const [modals, setModals] = useState({
     addProperty: false,
@@ -32,25 +42,6 @@ const Dashboard = () => {
     maintenance: false,
     lease: false
   });
-
-  // Close profile menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
-        setShowProfileMenu(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  
-  const handleSignOut = () => {
-    // Add your sign out logic here
-    console.log('Signing out...');
-  };
-
 
   // Sample data - replace with real data from your backend
   const financialData = {
@@ -66,74 +57,77 @@ const Dashboard = () => {
     { type: 'lease', desc: 'Lease renewal due - Unit 305', dueDate: '2025-02-15' }
   ];
 
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged(user => {
+      if (user) {
+        setCurrentUserId(user.uid);
+        setError(null);
+      } else {
+        setCurrentUserId(null);
+        setError('No user logged in');
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
+        setShowProfileMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const toggleModal = (modalName) => {
     setModals(prev => ({
       ...prev,
       [modalName]: !prev[modalName]
     }));
+    setError(null);
   };
 
-  
-  // In AddPropertyModal
-const handleSubmitProperty = async (e) => {
-  e.preventDefault();
-  const result = await addPropertyToFirestore(userId, propertyData);
-  if (result.success) {
-    onSubmit(propertyData);
-    onClose();
-  } else {
-    // Handle error - maybe show an error message to user
-    console.error('Failed to add property:', result.error);
-  }
-};
+  const handleFormSubmit = async (formHandler, data, modalName) => {
+    if (!currentUserId) {
+      setError('Please log in to perform this action');
+      return;
+    }
 
-// In AddTenantModal
-const handleSubmitTenant = async (e) => {
-  e.preventDefault();
-  const result = await addTenantToFirestore(userId, tenantData);
-  if (result.success) {
-    onSubmit(tenantData);
-    onClose();
-  } else {
-    console.error('Failed to add tenant:', result.error);
-  }
-};
+    setIsLoading(true);
+    setError(null);
 
-// In RecordPaymentModal
-const handleSubmitRecord = async (e) => {
-  e.preventDefault();
-  const result = await addPaymentToFirestore(userId, paymentData);
-  if (result.success) {
-    onSubmit(paymentData);
-    onClose();
-  } else {
-    console.error('Failed to record payment:', result.error);
-  }
-};
+    try {
+      const result = await formHandler(currentUserId, data);
+      if (result.success) {
+        toggleModal(modalName);
+        // You could add a success toast/notification here
+      } else {
+        setError(result.error || 'An error occurred');
+      }
+    } catch (err) {
+      setError(err.message || 'An unexpected error occurred');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-// In MaintenanceRequestModal
-const handleSubmitMaintenance = async (e) => {
-  e.preventDefault();
-  const result = await addMaintenanceRequestToFirestore(userId, requestData);
-  if (result.success) {
-    onSubmit(requestData);
-    onClose();
-  } else {
-    console.error('Failed to add maintenance request:', result.error);
-  }
-};
+  const handleSubmitProperty = (data) => handleFormSubmit(addPropertyToFirestore, data, 'addProperty');
+  const handleSubmitTenant = (data) => handleFormSubmit(addTenantToFirestore, data, 'addTenant');
+  const handleSubmitPayment = (data) => handleFormSubmit(addPaymentToFirestore, data, 'recordPayment');
+  const handleSubmitMaintenance = (data) => handleFormSubmit(addMaintenanceRequestToFirestore, data, 'maintenance');
+  const handleSubmitLease = (data) => handleFormSubmit(addLeaseToFirestore, data, 'lease');
 
-// In LeaseAgreementModal
-const handleSubmitLeaseAgreement = async (e) => {
-  e.preventDefault();
-  const result = await addLeaseToFirestore(userId, leaseData);
-  if (result.success) {
-    onSubmit(leaseData);
-    onClose();
-  } else {
-    console.error('Failed to create lease:', result.error);
-  }
-};
+  const handleSignOut = async () => {
+    try {
+      await auth.signOut();
+      setShowProfileMenu(false);
+    } catch (err) {
+      setError('Failed to sign out');
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -151,20 +145,18 @@ const handleSubmitLeaseAgreement = async (e) => {
                 className="flex items-center space-x-2 p-2 hover:bg-gray-800 rounded-lg"
               >
                 <img 
-                  src="/api/placeholder/32/32"
+                  src="/api/placeholder/32/32" 
                   alt="Profile" 
                   className="w-8 h-8 rounded-full"
                 />
                 <ChevronDown size={16} className={`transition-transform duration-200 ${showProfileMenu ? 'transform rotate-180' : ''}`} />
               </button>
 
-              {/* Profile Dropdown Menu */}
               {showProfileMenu && (
                 <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg py-1 text-gray-800">
                   <button 
                     className="flex items-center space-x-2 px-4 py-2 hover:bg-gray-100 w-full text-left"
                     onClick={() => {
-                      // Add profile action here
                       console.log('Navigate to profile');
                     }}
                   >
@@ -184,6 +176,15 @@ const handleSubmitLeaseAgreement = async (e) => {
           </div>
         </div>
       </nav>
+
+      {/* Error Alert */}
+      {error && (
+        <div className="max-w-7xl mx-auto mt-4">
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+            <span className="block sm:inline">{error}</span>
+          </div>
+        </div>
+      )}
 
       <div className="max-w-7xl mx-auto p-6">
         {/* Quick Stats */}
@@ -234,17 +235,23 @@ const handleSubmitLeaseAgreement = async (e) => {
             <div className="bg-white p-4 rounded-lg shadow-sm">
               <div className="flex flex-wrap gap-4">
                 <button 
-                className="flex items-center space-x-2 px-4 py-2 bg-black text-white rounded-lg hover:bg-gray-800"
-                onClick={() => toggleModal('addProperty')}
+                  className="flex items-center space-x-2 px-4 py-2 bg-black text-white rounded-lg hover:bg-gray-800"
+                  onClick={() => toggleModal('addProperty')}
                 >
                   <Plus size={20} />
                   <span>Add Property</span>
                 </button>
-                <button onClick={() => toggleModal('addTenant')} className="flex items-center space-x-2 px-4 py-2 bg-black text-white rounded-lg hover:bg-gray-800">
+                <button 
+                  onClick={() => toggleModal('addTenant')} 
+                  className="flex items-center space-x-2 px-4 py-2 bg-black text-white rounded-lg hover:bg-gray-800"
+                >
                   <Users size={20} />
                   <span>Add Tenant</span>
                 </button>
-                <button onClick={() => toggleModal('lease')} className="flex items-center space-x-2 px-4 py-2 bg-black text-white rounded-lg hover:bg-gray-800">
+                <button 
+                  onClick={() => toggleModal('lease')} 
+                  className="flex items-center space-x-2 px-4 py-2 bg-black text-white rounded-lg hover:bg-gray-800"
+                >
                   <FileText size={20} />
                   <span>New Lease</span>
                 </button>
@@ -264,7 +271,7 @@ const handleSubmitLeaseAgreement = async (e) => {
                       <div>
                         <p className="font-medium">{activity.desc}</p>
                         <p className="text-sm text-gray-500">
-                          {activity.amount ? `$${activity.amount}` : activity.status || `Due: ${activity.dueDate}`}
+                          {activity.amount ? `KES${activity.amount}` : activity.status || `Due: ${activity.dueDate}`}
                         </p>
                       </div>
                     </div>
@@ -281,13 +288,19 @@ const handleSubmitLeaseAgreement = async (e) => {
             <div className="bg-white p-6 rounded-lg shadow-sm">
               <h2 className="text-xl font-bold mb-4">Quick Actions</h2>
               <div className="space-y-4">
-                <button onClick={() => toggleModal('recordPayment')} className="w-full text-left p-4 border rounded-lg hover:bg-gray-50">
+                <button 
+                  onClick={() => toggleModal('recordPayment')} 
+                  className="w-full text-left p-4 border rounded-lg hover:bg-gray-50"
+                >
                   <div className="flex items-center space-x-3">
                     <DollarSign className="text-green-500" />
                     <span>Record Payment</span>
                   </div>
                 </button>
-                <button   onClick={() => toggleModal('maintenance')} className="w-full text-left p-4 border rounded-lg hover:bg-gray-50">
+                <button 
+                  onClick={() => toggleModal('maintenance')} 
+                  className="w-full text-left p-4 border rounded-lg hover:bg-gray-50"
+                >
                   <div className="flex items-center space-x-3">
                     <Wrench className="text-blue-500" />
                     <span>Create Maintenance Request</span>
@@ -319,30 +332,37 @@ const handleSubmitLeaseAgreement = async (e) => {
           </div>
         </div>
       </div>
+
+      {/* Modals */}
       <AddPropertyModal 
         isOpen={modals.addProperty}
         onClose={() => toggleModal('addProperty')}
         onSubmit={handleSubmitProperty}
+        isLoading={isLoading}
       />
       <AddTenantModal 
         isOpen={modals.addTenant}
         onClose={() => toggleModal('addTenant')}
         onSubmit={handleSubmitTenant}
+        isLoading={isLoading}
       />
       <RecordPaymentModal 
         isOpen={modals.recordPayment}
         onClose={() => toggleModal('recordPayment')}
-        onSubmit={handleSubmitRecord}
+        onSubmit={handleSubmitPayment}
+        isLoading={isLoading}
       />
       <MaintenanceRequestModal 
         isOpen={modals.maintenance}
         onClose={() => toggleModal('maintenance')}
         onSubmit={handleSubmitMaintenance}
+        isLoading={isLoading}
       />
       <LeaseAgreementModal 
         isOpen={modals.lease}
         onClose={() => toggleModal('lease')}
-        onSubmit={handleSubmitLeaseAgreement}
+        onSubmit={handleSubmitLease}
+        isLoading={isLoading}
       />
     </div>
   );
